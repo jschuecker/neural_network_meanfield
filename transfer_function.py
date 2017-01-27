@@ -19,6 +19,7 @@ import mpmath
 import siegert
 from scipy.special import zetac
 import fortran_functions as ff
+import scipy.optimize as opt
 
 
 def transfer_function_taylor(omega, params, mu, sigma):
@@ -89,7 +90,7 @@ def transfer_function_shift(omega, params, mu, sigma):
     # for frequency zero the exact expression is given by the derivative of
     # f-I-curve
     if np.abs(omega - 0.) < 1e-15:
-        return siegert.d_nu_d_mu(taum, tauf, taur, Vth, V0, mu, sigma)
+        return siegert.d_nu_d_mu(taum, taur, Vth, V0, mu, sigma)
     else:
         nu = siegert.nu_0(taum, taur, Vth, V0, mu, sigma)
 
@@ -101,11 +102,91 @@ def transfer_function_shift(omega, params, mu, sigma):
 
         return np.sqrt(2.) / sigma * nu / (1. + complex(0., complex(omega * taum))) * frac
 
+
+def den_transfer_function_shift(omega, params, mu, sigma):
+    """
+    Calculates the denominator of the transfer function according to $\tilde{n}$ in [1].
+
+    """
+
+    # convert from ms to s
+    taum = params['taum'] * 1e-3
+    tauf = params['tauf'] * 1e-3
+    Vth = params['Vth']
+    V0 = params['V0']
+
+    # convert mu to absolute value (not relative to reset)
+    mu += V0
+
+    # effective threshold and reset
+    alpha = np.sqrt(2) * abs(zetac(0.5) + 1)
+    Vth += sigma * alpha / 2. * np.sqrt(tauf / taum)
+    V0 += sigma * alpha / 2. * np.sqrt(tauf / taum)
+
+    x_t = np.sqrt(2.) * (Vth - mu) / sigma
+    x_r = np.sqrt(2.) * (V0 - mu) / sigma
+    z = complex(-0.5, complex(omega * taum))
+
+    return (1. + complex(0., complex(omega * taum))) * Phi_x_r(z, x_r, x_t)
+
+
+def transfer_function_pole(f_im_start, params, mu, sigma):
+    """
+    Search for poles of $\tilde{n}$ in [1] by minimizing the absolute
+    value of its denominator
+
+    Arguments:
+    f_im_start: initial imaginary frequency f for miminum search
+
+    Returns:
+    The pole frequency f
+
+    """
+
+    def den(f):
+        re = f[0]
+        im = f[1]
+        den = den_transfer_function_shift(
+            (2. * np.pi) * complex(re, im), params, mu, sigma)
+        return np.abs(den)
+
+    minimum = opt.fmin_tnc(
+        den, [0, f_im_start], approx_grad=True)
+
+    pole = complex(minimum[0][0], minimum[0][1])
+
+    if np.abs(den_transfer_function_shift((2. * np.pi) * pole, params, mu, sigma)) < 1e-6:
+        return pole
+    else:
+        return None
+
+
+def transfer_function_residue(pole, params, mu, sigma):
+    """
+    Calculates the residue for a given pole of $\tilde{n}$ in [1] by
+    integrating around the pole with a diamond-like integration path
+
+    """
+
+    # determine integration curve
+    r = 0.01
+    diam = r * np.array([1, 1j, -1, -1j, 1])
+    integration_path = pole + np.array(diam)
+
+    def tf(f):
+        return transfer_function_shift(2 * np.pi * f, params, mu, sigma)
+
+    residue = mpmath.quad(
+        tf, integration_path) / (2 * np.pi * 1j)
+
+    return complex(mpmath.re(residue), mpmath.im(residue))
+
+
 # ______________________________________________________________________________
 # Auxiliary functions
 
 
-def Phi(a, x):
+def Phi_fortran(a, x):
     """
     Calculates Phi(a,x) = exp(x**2/4)*U(a,x), where U(a,x) is the
     parabolic cylinder function. Implementation uses the relation to
@@ -124,7 +205,8 @@ def Phi(a, x):
     value = complex(value.real, value.imag)
     return value
 
-def Phi_mpmath(z, x):
+
+def Phi(z, x):
     """
     Calculates Phi(a,x) = exp(x**2/4)*U(a,x), where U(a,x) is the
     parabolic cylinder function. Implementation uses the mpmath
@@ -132,8 +214,9 @@ def Phi_mpmath(z, x):
     and not used in this package but added for completeness.
     """
 
-    value = np.exp(0.25*x**2) * complex(mpmath.pcfu(z, -x))
+    value = np.exp(0.25 * x**2) * complex(mpmath.pcfu(z, -x))
     return value
+
 
 def d_Phi(z, x):
     """
