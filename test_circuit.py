@@ -8,6 +8,8 @@ import circuit
 import numpy as np
 import h5py_wrapper.wrapper as h5
 import unittest
+import transfer_function as tf
+
 
 class TestCircuit(unittest.TestCase):
 
@@ -82,6 +84,19 @@ class TestCircuit(unittest.TestCase):
         freqs, power = net.create_power_spectra()
         power_test = h5.load_h5(self.test_data, 'empirical/power')
         assert (np.allclose(power_test, power, rtol=self.rtol, atol=self.atol))
+
+    def testPoleResidual(self):
+        pole = tf.transfer_function_pole(10.,
+                                         self.net.ana.params, 5.4, 8.3)
+        pole_test = (-7.99502583232106e-11 + 22.591488174234975j)
+        print pole, pole_test
+        assert (np.allclose(pole, pole_test, rtol=self.rtol, atol=self.atol))
+        residual = tf.transfer_function_residue(pole,
+                                                self.net.ana.params, 5.4, 8.3)
+        residual_test = (-9.765679125123092e-15 - 36.546341758235144j)
+        assert (
+            np.allclose(residual, residual_test, rtol=self.rtol, atol=self.atol))
+
 
 if __name__ == '__main__':
     unittest.main()
